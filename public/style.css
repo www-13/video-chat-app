@@ -1,0 +1,29 @@
+body {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  background: #f0f0f0;
+  margin: 0;
+  padding: 20px;
+}
+
+.controls {
+  margin-bottom: 20px;
+}
+
+.room-code {
+  margin-top: 10px;
+}
+
+.videos {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+video {
+  width: 300px;
+  height: 225px;
+  background: #000;
+  border: 2px solid #333;
+  border-radius: 10px;
+}
