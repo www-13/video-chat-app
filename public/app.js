@@ -9,131 +9,101 @@ const joinBtn = document.getElementById("joinBtn");
 let localStream;
 let peerConnection;
 let socket;
-let roomCode = "";
+let roomCode = '';
+let isHost = false;
 
-const configuration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+const config = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' }
+  ]
 };
 
-let candidateQueue = [];
-
-// UI: Show input field when "Join Room" is clicked
 joinRoomBtn.addEventListener("click", () => {
   document.querySelector(".room-code").style.display = "block";
 });
 
-// UI: Create Room
 createRoomBtn.addEventListener("click", async () => {
   roomCode = Math.floor(100000 + Math.random() * 900000).toString();
-  console.log("Room code:", roomCode);
-
-  await start();
-  socket.emit("joinRoom", roomCode);
-  alert(`Room created: ${roomCode}`);
+  console.log("Room Code:", roomCode);
+  await start(true); // isHost = true
 });
 
-// UI: Join Room
 joinBtn.addEventListener("click", async () => {
   roomCode = roomCodeInput.value.trim();
   if (roomCode) {
-    console.log("Joining room with code:", roomCode);
-    await start();
-    socket.emit("joinRoom", roomCode);
+    console.log(`Joining room with code: ${roomCode}`);
+    await start(false); // isHost = false
   }
 });
 
-async function start() {
-  socket = io();
+async function start(host) {
+  isHost = host;
 
-  socket.on("connect", () => {
-    console.log("Connected to server via socket:", socket.id);
-  });
-
-  localStream = await navigator.mediaDevices.getUserMedia({
-    video: true,
-    audio: true,
-  });
+  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
   localVideo.srcObject = localStream;
 
-  peerConnection = new RTCPeerConnection(configuration);
+  socket = io();
 
-  // Add tracks to peer connection
-  localStream.getTracks().forEach((track) =>
-    peerConnection.addTrack(track, localStream)
-  );
+  socket.emit('joinRoom', roomCode);
 
-  // Send ICE candidates
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      socket.emit("signal", {
-        to: roomCode,
-        signal: {
-          type: "candidate",
-          candidate: event.candidate,
-        },
-      });
+  socket.on('userJoined', async (userId) => {
+    console.log("User joined:", userId);
+    if (isHost) {
+      await createOffer();
     }
-  };
+  });
 
-  // Handle remote stream
+  socket.on('signal', async (data) => {
+    const { signal, from } = data;
+
+    if (signal.type === 'offer') {
+      await createAnswer(signal);
+    } else if (signal.type === 'answer') {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+    } else if (signal.candidate) {
+      await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+    }
+  });
+
+  setupPeerConnection();
+}
+
+function setupPeerConnection() {
+  peerConnection = new RTCPeerConnection(config);
+
+  localStream.getTracks().forEach(track => {
+    peerConnection.addTrack(track, localStream);
+  });
+
   peerConnection.ontrack = (event) => {
     remoteVideo.srcObject = event.streams[0];
   };
 
-  socket.on("userJoined", async (socketId) => {
-    console.log("User joined:", socketId);
-
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-
-    socket.emit("signal", {
-      to: roomCode,
-      signal: {
-        type: "offer",
-        sdp: offer.sdp,
-      },
-    });
-  });
-
-  socket.on("signal", async (data) => {
-    const signal = data.signal;
-
-    if (signal.type === "offer") {
-      await peerConnection.setRemoteDescription(
-        new RTCSessionDescription({ type: "offer", sdp: signal.sdp })
-      );
-
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-
-      socket.emit("signal", {
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      socket.emit('signal', {
         to: roomCode,
-        signal: {
-          type: "answer",
-          sdp: answer.sdp,
-        },
+        signal: { candidate: event.candidate }
       });
     }
+  };
+}
 
-    if (signal.type === "answer") {
-      await peerConnection.setRemoteDescription(
-        new RTCSessionDescription({ type: "answer", sdp: signal.sdp })
-      );
+async function createOffer() {
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  socket.emit('signal', {
+    to: roomCode,
+    signal: offer
+  });
+}
 
-      // Flush any candidates that arrived early
-      candidateQueue.forEach((candidate) =>
-        peerConnection.addIceCandidate(candidate)
-      );
-      candidateQueue = [];
-    }
-
-    if (signal.type === "candidate") {
-      const iceCandidate = new RTCIceCandidate(signal.candidate);
-      if (peerConnection.remoteDescription) {
-        await peerConnection.addIceCandidate(iceCandidate);
-      } else {
-        candidateQueue.push(iceCandidate);
-      }
-    }
+async function createAnswer(offer) {
+  await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await peerConnection.createAnswer();
+  await peerConnection.setLocalDescription(answer);
+  socket.emit('signal', {
+    to: roomCode,
+    signal: answer
   });
 }
